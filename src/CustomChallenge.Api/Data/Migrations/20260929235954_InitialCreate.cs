@@ -37,7 +37,7 @@ namespace CustomChallenge.Api.Data.Migrations
                     Price = table.Column<decimal>(type: "decimal(18,2)", nullable: false),
                     Stock = table.Column<int>(type: "int", nullable: false),
                     IsActive = table.Column<bool>(type: "bit", nullable: false),
-                    RowVersion = table.Column<byte[]>(type: "rowversion", rowVersion: true, nullable: false)
+                    Version = table.Column<int>(type: "int", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -74,12 +74,12 @@ namespace CustomChallenge.Api.Data.Migrations
 
             migrationBuilder.InsertData(
                 table: "Products",
-                columns: new[] { "Id", "IsActive", "Name", "Price", "Stock" },
+                columns: new[] { "Id", "IsActive", "Name", "Price", "Stock", "Version" },
                 values: new object[,]
                 {
-                    { 1, true, "Laptop", 1200m, 10 },
-                    { 2, true, "Keyboard", 100m, 25 },
-                    { 3, true, "Mouse", 50m, 0 }
+                    { 1, true, "Laptop", 1200m, 10, 1 },
+                    { 2, true, "Keyboard", 100m, 25, 1 },
+                    { 3, true, "Mouse", 50m, 0, 1 }
                 });
 
             migrationBuilder.CreateIndex(

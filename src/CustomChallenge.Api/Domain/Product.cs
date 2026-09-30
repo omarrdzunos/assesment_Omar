@@ -8,7 +8,10 @@ public class Product
     public int Stock { get; set; }
     public bool IsActive { get; set; }
 
-    // Concurrency token: prevents overselling when two requests decrement
-    // stock for the same product at the same time (see PLAN.md).
-    public byte[] RowVersion { get; set; } = [];
+    // App-managed concurrency token (bumped in AppDbContext.SaveChanges):
+    // prevents overselling when two requests decrement stock for the same
+    // product at the same time (see PLAN.md). Chosen over a DB-generated
+    // rowversion column so behavior is identical across providers (SQL
+    // Server in production, SQLite in tests).
+    public int Version { get; set; }
 }

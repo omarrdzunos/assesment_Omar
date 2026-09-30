@@ -15,7 +15,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(p => p.Price)
             .HasColumnType("decimal(18,2)");
 
-        builder.Property(p => p.RowVersion)
-            .IsRowVersion();
+        builder.Property(p => p.Version)
+            .IsConcurrencyToken();
     }
 }
