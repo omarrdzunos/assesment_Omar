@@ -4,9 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace CustomChallenge.Api.ExceptionHandling;
 
-// Modern .NET 8+ replacement for a custom exception-handling middleware:
-// a plain DI class, trivially unit-testable, and composable with
-// AddProblemDetails() for a consistent RFC 7807 error shape app-wide.
 public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
 {
     public async ValueTask<bool> TryHandleAsync(
