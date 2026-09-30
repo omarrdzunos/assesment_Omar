@@ -166,11 +166,17 @@ concurrent cancel requests for the same order can't both restore stock
 restore it.
 
 One gotcha this approach surfaces: because `ExecuteUpdateAsync` bypasses
-the change tracker, a *tracking* read later in the same `DbContext`
-can return a stale, already-tracked instance instead of what was just
-persisted. `OrderService.GetOrderByIdAsync` uses `.AsNoTracking()` for
-exactly this reason — it's a pure read, so there's no downside, and it
-guarantees callers see the real, current row.
+the change tracker, a *tracking* read later in the same `DbContext` can
+return a stale, already-tracked instance instead of what was just
+persisted — caught in practice by a unit test that calls
+`CancelOrderAsync` then `GetOrderByIdAsync` in the same context and got
+back `Pending` for an order that was, in the database, already
+`Cancelled`. `GetOrderByIdAsync` now projects straight to `OrderResponse`
+with `.Select(...)` instead of loading full entities via `Include`: a
+projection to a non-entity type is never tracked in the first place (no
+`.AsNoTracking()` needed to opt out of something that was never
+happening), it sidesteps the staleness risk entirely, and it also fetches
+only the columns the DTO actually needs.
 
 ### Validation split: `DataAnnotations` for shape, domain exceptions for business rules
 

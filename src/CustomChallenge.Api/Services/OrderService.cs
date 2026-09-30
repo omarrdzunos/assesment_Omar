@@ -93,19 +93,16 @@ public class OrderService(AppDbContext db) : IOrderService
 
     public async Task<OrderResponse> GetOrderByIdAsync(int id, CancellationToken ct)
     {
-        // AsNoTracking: this is a pure read, and it matters here specifically
-        // because ExecuteUpdateAsync (CreateOrderAsync/CancelOrderAsync) writes
-        // straight to the database without touching the change tracker — a
-        // tracking query could otherwise hand back a stale, already-tracked
-        // instance instead of what was actually just persisted.
-        var order = await db.Orders
-            .AsNoTracking()
-            .Include(o => o.Items)
-            .ThenInclude(i => i.Product)
-            .FirstOrDefaultAsync(o => o.Id == id, ct)
+        return await db.Orders
+            .Where(o => o.Id == id)
+            .Select(o => new OrderResponse(
+                o.Id,
+                o.CreatedAt,
+                o.Status,
+                o.Items.Select(i => new OrderItemResponse(i.ProductId, i.Product!.Name, i.Quantity, i.UnitPrice)).ToList(),
+                o.Items.Sum(i => i.Quantity * i.UnitPrice)))
+            .FirstOrDefaultAsync(ct)
             ?? throw new OrderNotFoundException(id);
-
-        return MapToResponse(order);
     }
 
     public async Task CancelOrderAsync(int id, CancellationToken ct)
@@ -151,15 +148,6 @@ public class OrderService(AppDbContext db) : IOrderService
     {
         var items = order.Items
             .Select(i => new OrderItemResponse(i.ProductId, products[i.ProductId].Name, i.Quantity, i.UnitPrice))
-            .ToList();
-
-        return new OrderResponse(order.Id, order.CreatedAt, order.Status, items, items.Sum(i => i.Quantity * i.UnitPrice));
-    }
-
-    private static OrderResponse MapToResponse(Order order)
-    {
-        var items = order.Items
-            .Select(i => new OrderItemResponse(i.ProductId, i.Product?.Name ?? string.Empty, i.Quantity, i.UnitPrice))
             .ToList();
 
         return new OrderResponse(order.Id, order.CreatedAt, order.Status, items, items.Sum(i => i.Quantity * i.UnitPrice));
