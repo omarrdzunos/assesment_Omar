@@ -46,20 +46,42 @@ ASP.NET Core, no solo excepciones propias).
 
 ## Atomicidad y concurrencia (creación de orden)
 
-1. **Atomicidad transaccional**: insertar `Order` + `OrderItems` y descontar
-   `Product.Stock` en un único `SaveChangesAsync()` → EF Core ya lo envuelve en
-   una transacción implícita.
-2. **Condición de carrera** (el punto realmente "senior"): dos requests
-   concurrentes podrían leer el mismo stock antes de que ninguno lo descuente.
-   Solución: **concurrency token** (`RowVersion` / `[Timestamp]`) en `Product`.
-   Si el stock cambió entre la validación y el `SaveChanges`, EF lanza
-   `DbUpdateConcurrencyException` → se mapea a `409 Conflict`.
+Estrategia actual (revisada — ver [README.md](README.md#concurrency-atomic-conditional-executeupdateasync-not-a-concurrency-token)
+para el detalle completo y el porqué del cambio): **update condicional atómico**
+en la base de datos en vez de un concurrency token optimista.
+
+1. Se valida que no haya `ProductId` repetidos en el request (`DuplicateOrderItemsException`, 400).
+2. Se abre una transacción explícita (`Database.BeginTransactionAsync`).
+3. Por cada item, **en orden ascendente de `ProductId`** (evita deadlocks entre
+   órdenes que tocan los mismos productos en orden distinto):
+   ```csharp
+   var affected = await db.Products
+       .Where(p => p.Id == item.ProductId && p.IsActive && p.Stock >= item.Quantity)
+       .ExecuteUpdateAsync(s => s.SetProperty(p => p.Stock, p => p.Stock - item.Quantity), ct);
+   ```
+   El `WHERE` y el `SET` se evalúan como una sola sentencia atómica — no hay
+   ventana entre "leer stock" y "escribir stock" para que otra transacción se
+   cuele. Si `affected == 0`, una lectura de diagnóstico determina la causa
+   exacta (`ProductNotFoundException` / `ProductInactiveException` /
+   `InsufficientStockException`).
+4. Se agrega la `Order` + `OrderItems`, `SaveChangesAsync`, y `CommitAsync`.
+   La transacción explícita es obligatoria porque `ExecuteUpdateAsync` no pasa
+   por el change tracker ni por la transacción implícita de `SaveChanges`.
+5. Red de seguridad en la BD: check constraint `CK_Products_Stock_NonNegative`
+   (`Stock >= 0`) en `Products`.
+
+Se descartó el concurrency token (`Product.Version` + `DbUpdateConcurrencyException`)
+porque rechazaba compras válidas: si dos requests piden 1 unidad de un producto
+con 5 en stock, uno de los dos podía perder la carrera optimista y recibir 409
+aunque había stock de sobra para ambos.
 
 ## Cancelación
 
-Solo permitida si `Order.Status == Pending`. Cambia estado a `Cancelled` y
-devuelve el stock de cada `OrderItem` a su `Product` (misma lógica de
-atomicidad/concurrencia que la creación).
+Solo permitida si `Order.Status == Pending`. La transición de estado es también
+un update condicional atómico (`WHERE Id = @id AND Status = Pending`), así que
+dos cancelaciones concurrentes de la misma orden no pueden devolver el stock
+dos veces — solo la que realmente cambia el estado continúa y restaura stock
+(también vía `ExecuteUpdateAsync`, ordenado por `ProductId`).
 
 ## Endpoints
 
@@ -79,11 +101,19 @@ atomicidad/concurrencia que la creación).
 
 ## Testing backend
 
-- Unit tests de `OrderService` (SQLite in-memory o EF InMemory provider):
-  orden válida, stock insuficiente, producto inválido/inactivo, cancelar orden pendiente.
+- Unit tests de `OrderService` contra **SQLite in-memory real** (no el provider
+  `InMemory` de EF — `ExecuteUpdateAsync` no es compatible con él): orden válida,
+  stock insuficiente, producto inválido/inactivo, items duplicados, cancelar
+  orden pendiente, cancelar dos veces (verifica que el stock no se restaure dos
+  veces).
 - 1 integration test real con `WebApplicationFactory<Program>` contra SQL Server
   Express local (BD de prueba dedicada, migraciones aplicadas, limpieza entre tests):
   cubre HTTP → Controller → Service → EF Core → SQL.
+- 1 integration test de **concurrencia real**: 10 `POST /api/orders` en paralelo
+  contra un producto con stock 5 (cantidad 1 cada uno) → exactamente 5 deben
+  responder 201 y 5 con 409, y el stock final debe ser 0. Es la prueba de que
+  la estrategia de `ExecuteUpdateAsync` condicional realmente sostiene bajo
+  carga concurrente real, no solo que "el SQL se ve atómico".
 
 ## Frontend
 

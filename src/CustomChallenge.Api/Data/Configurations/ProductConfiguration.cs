@@ -15,7 +15,8 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(p => p.Price)
             .HasColumnType("decimal(18,2)");
 
-        builder.Property(p => p.Version)
-            .IsConcurrencyToken();
+        // Last line of defense: even if application logic has a bug, the
+        // database itself refuses to let stock go negative.
+        builder.ToTable(t => t.HasCheckConstraint("CK_Products_Stock_NonNegative", "Stock >= 0"));
     }
 }

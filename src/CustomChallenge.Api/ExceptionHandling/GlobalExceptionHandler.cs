@@ -16,9 +16,9 @@ public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IE
         {
             ProductNotFoundException or OrderNotFoundException
                 => (StatusCodes.Status404NotFound, "Resource not found."),
-            ProductInactiveException or ArgumentException
+            ProductInactiveException or DuplicateOrderItemsException or ArgumentException
                 => (StatusCodes.Status400BadRequest, "Invalid request."),
-            InsufficientStockException or OrderNotPendingException or StockConflictException
+            InsufficientStockException or OrderNotPendingException
                 => (StatusCodes.Status409Conflict, "Business rule conflict."),
             _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred.")
         };

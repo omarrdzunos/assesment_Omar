@@ -10,57 +10,75 @@ public class OrderService(AppDbContext db) : IOrderService
 {
     public async Task<OrderResponse> CreateOrderAsync(CreateOrderRequest request, CancellationToken ct)
     {
-        // Collapse duplicate ProductId entries so "buy 2 laptops" split across
-        // two lines is validated/decremented as a single quantity of 2.
-        var requestedQuantities = request.Items
-            .GroupBy(i => i.ProductId)
-            .ToDictionary(g => g.Key, g => g.Sum(i => i.Quantity));
+        var duplicate = request.Items.GroupBy(i => i.ProductId).FirstOrDefault(g => g.Count() > 1);
+        if (duplicate is not null)
+        {
+            throw new DuplicateOrderItemsException(duplicate.Key);
+        }
 
-        var productIds = requestedQuantities.Keys.ToList();
+        // Fixed lock order across all requests (ascending ProductId) so two
+        // orders that both touch, say, products 1 and 2 always acquire their
+        // row locks in the same order — this rules out a classic deadlock
+        // between two concurrent orders locking the same rows in reverse order.
+        var orderedItems = request.Items.OrderBy(i => i.ProductId).ToList();
+
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+
+        var productIds = orderedItems.Select(i => i.ProductId).ToList();
         var products = await db.Products
+            .AsNoTracking()
             .Where(p => productIds.Contains(p.Id))
             .ToDictionaryAsync(p => p.Id, ct);
 
-        foreach (var (productId, quantity) in requestedQuantities)
+        var orderItems = new List<OrderItem>();
+
+        foreach (var item in orderedItems)
         {
-            if (!products.TryGetValue(productId, out var product))
+            // Single atomic, conditional UPDATE: the WHERE clause re-checks
+            // IsActive/Stock at write time, on the database itself, so there
+            // is no read-then-write gap for a concurrent request to exploit.
+            // This bypasses the change tracker entirely, which is exactly why
+            // the explicit transaction above is required — without it, this
+            // UPDATE and the Order insert below would not be atomic together.
+            var affected = await db.Products
+                .Where(p => p.Id == item.ProductId && p.IsActive && p.Stock >= item.Quantity)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.Stock, p => p.Stock - item.Quantity), ct);
+
+            if (affected == 0)
             {
-                throw new ProductNotFoundException(productId);
+                var product = await db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.Id == item.ProductId, ct);
+
+                if (product is null)
+                {
+                    throw new ProductNotFoundException(item.ProductId);
+                }
+
+                if (!product.IsActive)
+                {
+                    throw new ProductInactiveException(item.ProductId);
+                }
+
+                throw new InsufficientStockException(item.ProductId, item.Quantity, product.Stock);
             }
 
-            if (!product.IsActive)
+            orderItems.Add(new OrderItem
             {
-                throw new ProductInactiveException(productId);
-            }
-
-            if (product.Stock < quantity)
-            {
-                throw new InsufficientStockException(productId, quantity, product.Stock);
-            }
+                ProductId = item.ProductId,
+                Quantity = item.Quantity,
+                UnitPrice = products[item.ProductId].Price
+            });
         }
 
         var order = new Order
         {
             CreatedAt = DateTime.UtcNow,
-            Status = OrderStatus.Pending
+            Status = OrderStatus.Pending,
+            Items = orderItems
         };
 
-        foreach (var (productId, quantity) in requestedQuantities)
-        {
-            var product = products[productId];
-            product.Stock -= quantity;
-
-            order.Items.Add(new OrderItem
-            {
-                ProductId = product.Id,
-                Quantity = quantity,
-                UnitPrice = product.Price
-            });
-        }
-
         db.Orders.Add(order);
-
-        await SaveWithConcurrencyHandlingAsync(ct);
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
 
         return MapToResponse(order, products);
     }
@@ -75,7 +93,13 @@ public class OrderService(AppDbContext db) : IOrderService
 
     public async Task<OrderResponse> GetOrderByIdAsync(int id, CancellationToken ct)
     {
+        // AsNoTracking: this is a pure read, and it matters here specifically
+        // because ExecuteUpdateAsync (CreateOrderAsync/CancelOrderAsync) writes
+        // straight to the database without touching the change tracker — a
+        // tracking query could otherwise hand back a stale, already-tracked
+        // instance instead of what was actually just persisted.
         var order = await db.Orders
+            .AsNoTracking()
             .Include(o => o.Items)
             .ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(o => o.Id == id, ct)
@@ -86,43 +110,41 @@ public class OrderService(AppDbContext db) : IOrderService
 
     public async Task CancelOrderAsync(int id, CancellationToken ct)
     {
-        var order = await db.Orders
-            .Include(o => o.Items)
-            .ThenInclude(i => i.Product)
-            .FirstOrDefaultAsync(o => o.Id == id, ct)
-            ?? throw new OrderNotFoundException(id);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
-        if (order.Status != OrderStatus.Pending)
+        // Atomic, conditional status transition: if two cancel requests for
+        // the same order race, only one of them matches "Status = Pending"
+        // and flips it — the other affects zero rows and never restores stock.
+        var affected = await db.Orders
+            .Where(o => o.Id == id && o.Status == OrderStatus.Pending)
+            .ExecuteUpdateAsync(s => s.SetProperty(o => o.Status, OrderStatus.Cancelled), ct);
+
+        if (affected == 0)
         {
+            var exists = await db.Orders.AsNoTracking().AnyAsync(o => o.Id == id, ct);
+            if (!exists)
+            {
+                throw new OrderNotFoundException(id);
+            }
+
             throw new OrderNotPendingException(id);
         }
 
-        foreach (var item in order.Items)
+        var items = await db.OrderItems
+            .AsNoTracking()
+            .Where(i => i.OrderId == id)
+            .OrderBy(i => i.ProductId)
+            .Select(i => new { i.ProductId, i.Quantity })
+            .ToListAsync(ct);
+
+        foreach (var item in items)
         {
-            item.Product!.Stock += item.Quantity;
+            await db.Products
+                .Where(p => p.Id == item.ProductId)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.Stock, p => p.Stock + item.Quantity), ct);
         }
 
-        order.Status = OrderStatus.Cancelled;
-
-        await SaveWithConcurrencyHandlingAsync(ct);
-    }
-
-    private async Task SaveWithConcurrencyHandlingAsync(CancellationToken ct)
-    {
-        try
-        {
-            await db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateConcurrencyException ex)
-        {
-            var conflictingProductId = ex.Entries
-                .Select(e => e.Entity)
-                .OfType<Product>()
-                .Select(p => p.Id)
-                .FirstOrDefault();
-
-            throw new StockConflictException(conflictingProductId);
-        }
+        await transaction.CommitAsync(ct);
     }
 
     private static OrderResponse MapToResponse(Order order, IReadOnlyDictionary<int, Product> products)

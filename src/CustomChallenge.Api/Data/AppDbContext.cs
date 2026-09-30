@@ -15,32 +15,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
 
         modelBuilder.Entity<Product>().HasData(
-            new Product { Id = 1, Name = "Laptop", Price = 1200m, Stock = 10, IsActive = true, Version = 1 },
-            new Product { Id = 2, Name = "Keyboard", Price = 100m, Stock = 25, IsActive = true, Version = 1 },
-            new Product { Id = 3, Name = "Mouse", Price = 50m, Stock = 0, IsActive = true, Version = 1 }
+            new Product { Id = 1, Name = "Laptop", Price = 1200m, Stock = 10, IsActive = true },
+            new Product { Id = 2, Name = "Keyboard", Price = 100m, Stock = 25, IsActive = true },
+            new Product { Id = 3, Name = "Mouse", Price = 50m, Stock = 0, IsActive = true }
         );
-    }
-
-    public override int SaveChanges(bool acceptAllChangesOnSuccess)
-    {
-        BumpProductConcurrencyTokens();
-        return base.SaveChanges(acceptAllChangesOnSuccess);
-    }
-
-    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
-    {
-        BumpProductConcurrencyTokens();
-        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
-    }
-
-    private void BumpProductConcurrencyTokens()
-    {
-        foreach (var entry in ChangeTracker.Entries<Product>())
-        {
-            if (entry.State == EntityState.Modified)
-            {
-                entry.Entity.Version++;
-            }
-        }
     }
 }

@@ -2,6 +2,7 @@ using CustomChallenge.Api.Domain;
 using CustomChallenge.Api.Dtos;
 using CustomChallenge.Api.Exceptions;
 using CustomChallenge.Api.Services;
+using Microsoft.EntityFrameworkCore;
 using Shouldly;
 
 namespace CustomChallenge.Api.Tests;
@@ -27,6 +28,13 @@ public class OrderServiceTests : IDisposable
         return product;
     }
 
+    // ExecuteUpdateAsync writes straight to the database, bypassing the
+    // change tracker — so a tracked instance (e.g. the one SeedProduct just
+    // added) would otherwise shadow the fresh row with its stale in-memory
+    // value. AsNoTracking() forces a real read of what's actually persisted.
+    private int GetStock(int productId) =>
+        _db.Context.Products.AsNoTracking().Single(p => p.Id == productId).Stock;
+
     [Fact]
     public async Task CreateOrderAsync_WithValidRequest_DecrementsStockAndPersistsOrder()
     {
@@ -43,7 +51,7 @@ public class OrderServiceTests : IDisposable
         result.Items[0].UnitPrice.ShouldBe(1200m);
         result.Total.ShouldBe(3600m);
 
-        _db.Context.Products.Single(p => p.Id == 100).Stock.ShouldBe(7);
+        GetStock(100).ShouldBe(7);
     }
 
     [Fact]
@@ -58,7 +66,7 @@ public class OrderServiceTests : IDisposable
         await Should.ThrowAsync<InsufficientStockException>(
             () => _sut.CreateOrderAsync(request, CancellationToken.None));
 
-        _db.Context.Products.Single(p => p.Id == 100).Stock.ShouldBe(2);
+        GetStock(100).ShouldBe(2);
     }
 
     [Fact]
@@ -87,6 +95,25 @@ public class OrderServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateOrderAsync_WithDuplicateProductInItems_ThrowsDuplicateOrderItemsException()
+    {
+        SeedProduct(100, "Laptop", 1200m, stock: 10);
+        var request = new CreateOrderRequest
+        {
+            Items =
+            [
+                new CreateOrderItemRequest { ProductId = 100, Quantity = 1 },
+                new CreateOrderItemRequest { ProductId = 100, Quantity = 2 },
+            ]
+        };
+
+        await Should.ThrowAsync<DuplicateOrderItemsException>(
+            () => _sut.CreateOrderAsync(request, CancellationToken.None));
+
+        GetStock(100).ShouldBe(10);
+    }
+
+    [Fact]
     public async Task CancelOrderAsync_WhenPending_RestoresStockAndSetsCancelled()
     {
         SeedProduct(100, "Keyboard", 100m, stock: 10);
@@ -94,17 +121,17 @@ public class OrderServiceTests : IDisposable
         {
             Items = [new CreateOrderItemRequest { ProductId = 100, Quantity = 4 }]
         }, CancellationToken.None);
-        _db.Context.Products.Single(p => p.Id == 100).Stock.ShouldBe(6);
+        GetStock(100).ShouldBe(6);
 
         await _sut.CancelOrderAsync(order.Id, CancellationToken.None);
 
         var cancelled = await _sut.GetOrderByIdAsync(order.Id, CancellationToken.None);
         cancelled.Status.ShouldBe(OrderStatus.Cancelled);
-        _db.Context.Products.Single(p => p.Id == 100).Stock.ShouldBe(10);
+        GetStock(100).ShouldBe(10);
     }
 
     [Fact]
-    public async Task CancelOrderAsync_WhenAlreadyCancelled_ThrowsOrderNotPendingException()
+    public async Task CancelOrderAsync_WhenAlreadyCancelled_ThrowsOrderNotPendingExceptionAndDoesNotChangeStockAgain()
     {
         SeedProduct(100, "Keyboard", 100m, stock: 10);
         var order = await _sut.CreateOrderAsync(new CreateOrderRequest
@@ -112,8 +139,12 @@ public class OrderServiceTests : IDisposable
             Items = [new CreateOrderItemRequest { ProductId = 100, Quantity = 1 }]
         }, CancellationToken.None);
         await _sut.CancelOrderAsync(order.Id, CancellationToken.None);
+        GetStock(100).ShouldBe(10);
 
         await Should.ThrowAsync<OrderNotPendingException>(
             () => _sut.CancelOrderAsync(order.Id, CancellationToken.None));
+
+        // A second cancel must not restore stock a second time.
+        GetStock(100).ShouldBe(10);
     }
 }

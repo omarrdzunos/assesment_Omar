@@ -94,13 +94,12 @@ namespace CustomChallenge.Api.Data.Migrations
                     b.Property<int>("Stock")
                         .HasColumnType("int");
 
-                    b.Property<int>("Version")
-                        .IsConcurrencyToken()
-                        .HasColumnType("int");
-
                     b.HasKey("Id");
 
-                    b.ToTable("Products");
+                    b.ToTable("Products", t =>
+                        {
+                            t.HasCheckConstraint("CK_Products_Stock_NonNegative", "Stock >= 0");
+                        });
 
                     b.HasData(
                         new
@@ -109,8 +108,7 @@ namespace CustomChallenge.Api.Data.Migrations
                             IsActive = true,
                             Name = "Laptop",
                             Price = 1200m,
-                            Stock = 10,
-                            Version = 1
+                            Stock = 10
                         },
                         new
                         {
@@ -118,8 +116,7 @@ namespace CustomChallenge.Api.Data.Migrations
                             IsActive = true,
                             Name = "Keyboard",
                             Price = 100m,
-                            Stock = 25,
-                            Version = 1
+                            Stock = 25
                         },
                         new
                         {
@@ -127,8 +124,7 @@ namespace CustomChallenge.Api.Data.Migrations
                             IsActive = true,
                             Name = "Mouse",
                             Price = 50m,
-                            Stock = 0,
-                            Version = 1
+                            Stock = 0
                         });
                 });
 
