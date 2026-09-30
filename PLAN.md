@@ -110,13 +110,13 @@ Redux/React Query, elección de testing, y la decisión de usar .NET 10.
 
 ## Orden de implementación
 
-1. ~~Plan (este archivo)~~
-2. Scaffold solución backend (sln + proyecto API + proyecto de tests) + git init
-3. Dominio + `AppDbContext` + migraciones + seed de productos
-4. `GlobalExceptionHandler` + excepciones de dominio
-5. `OrderService` (crear orden con concurrencia + cancelar) + Controllers
-6. Unit tests backend
-7. Integration test contra SQL Server Express
-8. Frontend (Vite scaffold, páginas, hook de API)
-9. Tests frontend
-10. README con decisiones + revisión final de commits
+1. ~~Plan (este archivo)~~ ✅
+2. ~~Scaffold solución backend (sln + proyecto API + proyecto de tests) + git init~~ ✅
+3. ~~Dominio + `AppDbContext` + migraciones + seed de productos~~ ✅
+4. ~~`GlobalExceptionHandler` + excepciones de dominio~~ ✅
+5. ~~`OrderService` (crear orden con concurrencia + cancelar) + Controllers~~ ✅
+6. ~~Unit tests backend~~ ✅
+7. ~~Integration test contra SQL Server Express~~ ✅
+8. ~~Frontend (Vite scaffold, páginas, hook de API)~~ ✅
+9. ~~Tests frontend~~ ✅
+10. ~~README con decisiones + revisión final de commits~~ ✅ (ver [README.md](README.md))
